@@ -97,7 +97,7 @@ class Main:
         """
 
         parser = argparse.ArgumentParser(description='Trains and attacks a normal model on the chosen dataset.')
-        parser.add_argument('dataset', type=str, help='cifar10 | svhn | mnist')
+        parser.add_argument('--dataset', type=str, help='cifar10 | svhn | mnist')
         parser.add_argument('--directory', type=str, default='./checkpoints/')
         parser.add_argument('--tensorboard', action='store_true', help='use tensorboard for monitoring training')
         parser.add_argument('--no-cuda', action='store_false', dest='cuda', default=True, help='do not use cuda')

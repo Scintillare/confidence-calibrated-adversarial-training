@@ -6,11 +6,11 @@ from .log import log, LogLevel
 # allowing to easily prototype new experiments.
 
 # base directory for data
-BASE_DATA = ''
+BASE_DATA = './.assets/.data'
 # base directory for experiments (model files, adversarial examples etc.)
-BASE_EXPERIMENTS = ''
+BASE_EXPERIMENTS = './.assets/.experiments'
 # base directory for logs (mainly tensorboard for training)
-BASE_LOGS = ''
+BASE_LOGS = './.assets/.logs'
 
 if not os.path.exists(BASE_DATA):
     BASE_DATA = os.path.join(os.path.expanduser('~'), 'data') + '/'

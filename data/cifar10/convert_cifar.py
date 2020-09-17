@@ -2,7 +2,6 @@ import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.realpath(__file__)) + '/../../')
 from common import paths
-from common import vis
 from common import utils
 from common.log import log
 import torchvision
@@ -18,10 +17,10 @@ def download():
 
     trainset = torchvision.datasets.CIFAR10(root=paths.raw_cifar10_dir(), train=True, download=True)
     testset = torchvision.datasets.CIFAR10(root=paths.raw_cifar10_dir(), train=False, download=True)
-    train_images = numpy.array(trainset.train_data)
-    train_labels = numpy.array(trainset.train_labels)
-    test_images = numpy.array(testset.test_data)
-    test_labels = numpy.array(testset.test_labels)
+    train_images = numpy.array(trainset.data)
+    train_labels = numpy.array(trainset.targets)
+    test_images = numpy.array(testset.data)
+    test_labels = numpy.array(testset.targets)
 
     assert numpy.max(train_images) == 255
 
