@@ -81,7 +81,7 @@ class Objective:
 
         if self.true_classes is not None:
             probabilities = torch.nn.functional.softmax(logits, dim=1)
-            return probabilities[torch.arange(logits.size(0)).long(), self.true_classes]
+            return probabilities[torch.arange(logits.size(0)).long(), self.true_classes.long()]
         else:
             return torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[0]
 
@@ -98,12 +98,12 @@ class Objective:
         if self.target_classes is None:
             probabilities = torch.nn.functional.softmax(logits, dim=1)
             if self.true_classes is not None:
-                probabilities[torch.arange(logits.size(0)).long(), self.true_classes] = 0
+                probabilities[torch.arange(logits.size(0)).long(), self.true_classes.long()] = 0
             target_classes = torch.max(probabilities, dim=1)[1]
-            return probabilities[torch.arange(logits.size(0)).long(), target_classes]
+            return probabilities[torch.arange(logits.size(0)).long(), target_classes.long()]
         else:
             probabilities = torch.nn.functional.softmax(logits, dim=1)
-            return probabilities[torch.arange(logits.size(0)).long(), self.target_classes]
+            return probabilities[torch.arange(logits.size(0)).long(), self.target_classes.long()]
 
 
 class TargetedF0Objective(Objective):

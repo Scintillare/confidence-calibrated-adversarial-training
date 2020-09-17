@@ -87,7 +87,7 @@ class LInfNorm(Norm):
         :type perturbations: torch.autograd.Variable
         """
 
-        return torch.max(torch.abs(perturbations.view(perturbations.size()[0], -1)), dim=1)[0]
+        return torch.max(torch.abs(perturbations.reshape(perturbations.size()[0], -1)), dim=1)[0] #FIXME I change view -> reshape
 
     def normalize(self, gradients):
         """

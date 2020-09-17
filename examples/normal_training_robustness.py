@@ -14,7 +14,10 @@ from common.log import log
 import models
 from imgaug import augmenters as iaa
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
+
+# python ./examples/normal_training_robustness.py --dataset cifar10 --tensorboard
 
 def find_incomplete_state_file(model_file):
     """
@@ -154,7 +157,7 @@ class Main:
 
         writer = common.summary.SummaryPickleWriter('%s/logs/' % self.args.directory, max_queue=100)
         if self.args.tensorboard:
-            writer = torch.utils.tensorboard.SummaryWriter('%s/logs/' % self.args.directory, max_queue=100)
+            writer = SummaryWriter('%s/logs/' % self.args.directory, max_queue=100)
 
         crop = False
         flip = False

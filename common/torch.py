@@ -270,7 +270,7 @@ def one_hot(classes, C):
         one_hot = torch.autograd.Variable(one_hot)
 
     one_hot.zero_()
-    one_hot.scatter_(1, classes, 1)
+    one_hot.scatter_(1, classes.long(), 1)
 
     return one_hot
 
@@ -504,7 +504,7 @@ def classification_loss(logits, targets, reduction='mean'):
     assert len(list(logits.size())) == 2
 
     if logits.size()[1] > 1:
-        return torch.nn.functional.cross_entropy(logits, targets, reduction=reduction)
+        return torch.nn.functional.cross_entropy(logits, targets.long(), reduction=reduction)
     else:
         # probability 1 is class 1
         # probability 0 is class 0

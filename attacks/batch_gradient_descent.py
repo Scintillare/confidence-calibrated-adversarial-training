@@ -2,6 +2,7 @@ import torch
 from .attack import *
 import common.torch
 
+import gc
 
 class BatchGradientDescent(Attack):
     """
@@ -101,6 +102,7 @@ class BatchGradientDescent(Attack):
         for i in range(self.max_iterations + 1):
             # MAIN LOOP OF ATTACK
             # ORDER IMPORTANT
+            gc.collect()
             
             # Zero the gradient, as they are acculumated in PyTorch!
             if i > 0:

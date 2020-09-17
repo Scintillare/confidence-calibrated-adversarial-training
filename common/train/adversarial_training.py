@@ -87,7 +87,19 @@ class AdversarialTraining(NormalTraining):
         :type epoch: int
         """
 
-        for b, (inputs, targets) in enumerate(self.trainset):
+        batches = len(self.trainset)
+
+        cl_losses = None
+        cl_errors = None
+        cl_confidences = None
+
+        successes = None
+        losses = None
+        errors = None
+        confidences = None
+
+        b = 0
+        for inputs, targets in tqdm(self.trainset):
             if self.augmentation is not None:
                 inputs = self.augmentation.augment_images(inputs.numpy())
 
@@ -135,43 +147,68 @@ class AdversarialTraining(NormalTraining):
                 clean_error = torch.zeros(1)
                 loss = adversarial_loss
 
+            cl_losses = common.numpy.concatenate(cl_losses, common.torch.classification_loss(clean_logits, clean_targets, reduction='none').detach().cpu().numpy())
+            cl_errors = common.numpy.concatenate(cl_errors, common.torch.classification_error(clean_logits, clean_targets, reduction='none').detach().cpu().numpy())
+            cl_confidences = common.numpy.concatenate(cl_confidences, torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0].detach().cpu().numpy())
+
+            successes = common.numpy.concatenate(successes, 
+                                                torch.clamp(torch.abs(adversarial_targets - torch.max(
+                                                torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), 
+                                                max=1).detach().cpu().numpy())
+            losses = common.numpy.concatenate(losses, common.torch.classification_loss(adversarial_logits, adversarial_targets, reduction='none').detach().cpu().numpy())
+            errors = common.numpy.concatenate(errors, common.torch.classification_error(adversarial_logits, adversarial_targets, reduction='none').detach().cpu().numpy())
+            confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0].detach().cpu().numpy())
+
             loss.backward()
             self.optimizer.step()
             self.scheduler.step()
 
-            global_step = epoch * len(self.trainset) + b
-            self.writer.add_scalar('train/lr', self.scheduler.get_lr()[0], global_step=global_step)
+            if b == (batches-1):
+                # global_step = epoch * len(self.trainset) + b
+                global_step = epoch
+                self.writer.add_scalar('train/lr', self.scheduler.get_last_lr()[0], global_step=global_step)
 
-            if adversarial_inputs.shape[0] < inputs.shape[0]: # fraction is not 1
-                self.writer.add_scalar('train/loss', clean_loss.item(), global_step=global_step)
-                self.writer.add_scalar('train/error', clean_error.item(), global_step=global_step)
-                self.writer.add_scalar('train/confidence', torch.mean(torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
+                # if adversarial_inputs.shape[0] < inputs.shape[0]: # fraction is not 1
+                #     self.writer.add_scalar('train/loss', clean_loss.item(), global_step=global_step)
+                #     self.writer.add_scalar('train/error', clean_error.item(), global_step=global_step)
+                #     self.writer.add_scalar('train/confidence', torch.mean(torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
 
-                self.writer.add_histogram('train/logits', torch.max(clean_logits, dim=1)[0], global_step=global_step)
-                self.writer.add_histogram('train/confidences', torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0], global_step=global_step)
+                #     self.writer.add_histogram('train/logits', torch.max(clean_logits, dim=1)[0], global_step=global_step)
+                #     self.writer.add_histogram('train/confidences', torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0], global_step=global_step)
+                if adversarial_inputs.shape[0] < inputs.shape[0]: # fraction is not 1
+                    self.writer.add_scalar('train/loss', numpy.mean(cl_losses), global_step=global_step)
+                    self.writer.add_scalar('train/error', numpy.mean(cl_errors), global_step=global_step)
+                    self.writer.add_scalar('train/confidence', numpy.mean(cl_confidences), global_step=global_step)
 
-            success = torch.clamp(torch.abs(adversarial_targets - torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), max=1)
-            self.writer.add_scalar('train/adversarial_loss', adversarial_loss.item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_error', adversarial_error.item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_confidence', torch.mean(torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_success', torch.mean(success.float()).item(), global_step=global_step)
 
-            self.writer.add_histogram('train/adversarial_logits', torch.max(adversarial_logits, dim=1)[0], global_step=global_step)
-            self.writer.add_histogram('train/adversarial_confidences', torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0], global_step=global_step)
+                # success = torch.clamp(torch.abs(adversarial_targets - torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), max=1)
+                # self.writer.add_scalar('train/adversarial_loss', adversarial_loss.item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_error', adversarial_error.item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_confidence', torch.mean(torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_success', torch.mean(success.float()).item(), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_success', numpy.mean(successes), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_loss', numpy.mean(losses), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_error', numpy.mean(errors), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_confidence', numpy.mean(confidences), global_step=global_step)
 
-            adversarial_norms = self.attack.norm(adversarial_perturbations)
-            self.writer.add_histogram('train/adversarial_objectives', adversarial_objectives, global_step=global_step)
-            self.writer.add_histogram('train/adversarial_norms', adversarial_norms, global_step=global_step)
+                self.writer.add_histogram('train/adversarial_logits', torch.max(adversarial_logits, dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/adversarial_confidences', torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0], global_step=global_step)
 
-            if self.summary_gradients:
-                for name, parameter in self.model.named_parameters():
-                    self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
-                    self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
+                adversarial_norms = self.attack.norm(adversarial_perturbations)
+                self.writer.add_histogram('train/adversarial_objectives', adversarial_objectives, global_step=global_step)
+                self.writer.add_histogram('train/adversarial_norms', adversarial_norms, global_step=global_step)
 
-            if adversarial_inputs.shape[0] < inputs.shape[0]: # fraction is not 1
-                self.writer.add_images('train/images', inputs[:min(16, split)], global_step=global_step)
-            self.writer.add_images('train/adversarial_images', inputs[split:split + 16], global_step=global_step)
-            self.progress(epoch, b, len(self.trainset))
+                if self.summary_gradients:
+                    for name, parameter in self.model.named_parameters():
+                        self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
+                        self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
+
+                if adversarial_inputs.shape[0] < inputs.shape[0]: # fraction is not 1
+                    self.writer.add_images('train/images', inputs[:min(16, split)], global_step=global_step)
+                self.writer.add_images('train/adversarial_images', inputs[split:split + 16], global_step=global_step)
+            # self.progress(epoch, b, len(self.trainset))
+            b+=1
+
 
     def test(self, epoch):
         """
@@ -192,7 +229,8 @@ class AdversarialTraining(NormalTraining):
         norms = None
         objectives = None
 
-        for b, (inputs, targets) in enumerate(self.testset):
+        b = 0
+        for (inputs, targets) in tqdm(self.testset):
             if b >= self.max_batches:
                 break
 
@@ -213,7 +251,9 @@ class AdversarialTraining(NormalTraining):
             confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[0].detach().cpu().numpy())
             successes = common.numpy.concatenate(successes, torch.clamp(torch.abs(targets - torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[1]), max=1).detach().cpu().numpy())
             norms = common.numpy.concatenate(norms, self.attack.norm(adversarial_perturbations).detach().cpu().numpy())
-            self.progress(epoch, b, self.max_batches)
+            # self.progress(epoch, b, self.max_batches)
+            b += 1
+            del inputs, targets, logits
 
         global_step = epoch + 1# * len(self.trainset) + len(self.trainset) - 1
         self.writer.add_scalar('test/adversarial_loss', numpy.mean(losses), global_step=global_step)

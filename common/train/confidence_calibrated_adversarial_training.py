@@ -6,6 +6,8 @@ import common.numpy
 import attacks
 from .adversarial_training import *
 
+import gc
+
 
 class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
     """
@@ -57,6 +59,9 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
         self.N_class = None
         """ (int) Number of classes. """
 
+        # #FIXME
+        # self.N_class = 2
+
         if getattr(self.model, 'N_class', None) is not None:
             self.N_class = self.model.N_class
 
@@ -70,8 +75,19 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
         :param epoch: epoch
         :type epoch: int
         """
+        batches = len(self.trainset)
 
-        for b, (inputs, targets) in enumerate(self.trainset):
+        cl_losses = None
+        cl_errors = None
+        cl_confidences = None
+
+        successes = None
+        losses = None
+        errors = None
+        confidences = None
+        b = 0
+        for (inputs, targets) in tqdm(self.trainset):
+            gc.collect()
             if self.augmentation is not None:
                 inputs = self.augmentation.augment_images(inputs.numpy())
 
@@ -82,6 +98,7 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             if self.N_class is None:
                 _ = self.model.forward(inputs)
                 self.N_class = _.size(1)
+                del _
 
             distributions = common.torch.one_hot(targets, self.N_class)
 
@@ -95,12 +112,17 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             adversarial_targets = targets[split:]
             clean_distributions = distributions[:split]
             adversarial_distributions = distributions[split:]
+            del inputs, targets, distributions
 
             self.model.eval()
             self.objective.set(adversarial_targets)
             adversarial_perturbations, adversarial_objectives = self.attack.run(self.model, adversarial_inputs, self.objective)
+
+            gc.collect()
+
             adversarial_perturbations = common.torch.as_variable(adversarial_perturbations, self.cuda)
             adversarial_inputs = adversarial_inputs + adversarial_perturbations
+
 
             gamma, adversarial_norms = self.transition(adversarial_perturbations)
             gamma = common.torch.expand_as(gamma, adversarial_distributions)
@@ -117,46 +139,70 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             adversarial_logits = logits[split:]
 
             adversarial_loss = self.loss(adversarial_logits, adversarial_distributions)
-            adversarial_error = common.torch.classification_error(adversarial_logits, adversarial_targets)
+            # adversarial_error = common.torch.classification_error(adversarial_logits, adversarial_targets)
 
             clean_loss = self.loss(clean_logits, clean_distributions)
-            clean_error = common.torch.classification_error(clean_logits, clean_targets)
+            # clean_error = common.torch.classification_error(clean_logits, clean_targets)
             loss = (1 - fraction) * clean_loss + fraction * adversarial_loss
+
+            cl_losses = common.numpy.concatenate(cl_losses, self.loss(clean_logits, clean_distributions, reduction='none').detach().cpu().numpy())
+            cl_errors = common.numpy.concatenate(cl_errors, common.torch.classification_error(clean_logits, clean_targets, reduction='none').detach().cpu().numpy())
+            cl_confidences = common.numpy.concatenate(cl_confidences, torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0].detach().cpu().numpy())
+
+            successes = common.numpy.concatenate(successes, 
+                                                torch.clamp(torch.abs(adversarial_targets - torch.max(
+                                                torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), 
+                                                max=1).detach().cpu().numpy())
+            losses = common.numpy.concatenate(losses, common.torch.classification_loss(adversarial_logits, adversarial_targets, reduction='none').detach().cpu().numpy())
+            errors = common.numpy.concatenate(errors, common.torch.classification_error(adversarial_logits, adversarial_targets, reduction='none').detach().cpu().numpy())
+            confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0].detach().cpu().numpy())
+
 
             loss.backward()
             self.optimizer.step()
             self.scheduler.step()
 
-            global_step = epoch * len(self.trainset) + b
-            self.writer.add_scalar('train/lr', self.scheduler.get_lr()[0], global_step=global_step)
+            if b == batches-1:
+                global_step = epoch * len(self.trainset) + b
+                self.writer.add_scalar('train/lr', self.scheduler.get_lr()[0], global_step=global_step)
 
-            self.writer.add_scalar('train/loss', clean_loss.item(), global_step=global_step)
-            self.writer.add_scalar('train/error', clean_error.item(), global_step=global_step)
-            self.writer.add_scalar('train/confidence', torch.mean(torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
+                # self.writer.add_scalar('train/loss', clean_loss.item(), global_step=global_step)
+                # self.writer.add_scalar('train/error', clean_error.item(), global_step=global_step)
+                # self.writer.add_scalar('train/confidence', torch.mean(torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
+                self.writer.add_scalar('train/loss', numpy.mean(cl_losses), global_step=global_step)
+                self.writer.add_scalar('train/error', numpy.mean(cl_errors), global_step=global_step)
+                self.writer.add_scalar('train/confidence', numpy.mean(cl_confidences), global_step=global_step)
 
-            self.writer.add_histogram('train/logits', torch.max(clean_logits, dim=1)[0], global_step=global_step)
-            self.writer.add_histogram('train/confidences', torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0], global_step=global_step)
 
-            success = torch.clamp(torch.abs(adversarial_targets - torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), max=1)
-            self.writer.add_scalar('train/adversarial_loss', adversarial_loss.item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_error', adversarial_error.item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_confidence', torch.mean(torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
-            self.writer.add_scalar('train/adversarial_success', torch.mean(success.float()).item(), global_step=global_step)
 
-            self.writer.add_histogram('train/adversarial_logits', torch.max(adversarial_logits, dim=1)[0], global_step=global_step)
-            self.writer.add_histogram('train/adversarial_confidences', torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/logits', torch.max(clean_logits, dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/confidences', torch.max(torch.nn.functional.softmax(clean_logits, dim=1), dim=1)[0], global_step=global_step)
 
-            self.writer.add_histogram('train/adversarial_objectives', adversarial_objectives, global_step=global_step)
-            self.writer.add_histogram('train/adversarial_norms', adversarial_norms, global_step=global_step)
+                # success = torch.clamp(torch.abs(adversarial_targets - torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[1]), max=1)
+                # self.writer.add_scalar('train/adversarial_loss', adversarial_loss.item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_error', adversarial_error.item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_confidence', torch.mean(torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0]).item(), global_step=global_step)
+                # self.writer.add_scalar('train/adversarial_success', torch.mean(success.float()).item(), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_success', numpy.mean(successes), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_loss', numpy.mean(losses), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_error', numpy.mean(errors), global_step=global_step)
+                self.writer.add_scalar('train/adversarial_confidence', numpy.mean(confidences), global_step=global_step)
 
-            if self.summary_gradients:
-                for name, parameter in self.model.named_parameters():
-                    self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
-                    self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
+                self.writer.add_histogram('train/adversarial_logits', torch.max(adversarial_logits, dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/adversarial_confidences', torch.max(torch.nn.functional.softmax(adversarial_logits, dim=1), dim=1)[0], global_step=global_step)
 
-            self.writer.add_images('train/images', inputs[:min(16, split)], global_step=global_step)
-            self.writer.add_images('train/adversarial_images', inputs[split:split + 16], global_step=global_step)
-            self.progress(epoch, b, len(self.trainset))
+                self.writer.add_histogram('train/adversarial_objectives', adversarial_objectives, global_step=global_step)
+                self.writer.add_histogram('train/adversarial_norms', adversarial_norms, global_step=global_step)
+
+                if self.summary_gradients:
+                    for name, parameter in self.model.named_parameters():
+                        self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
+                        self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
+
+                self.writer.add_images('train/images', inputs[:min(16, split)], global_step=global_step)
+                self.writer.add_images('train/adversarial_images', inputs[split:split + 16], global_step=global_step)
+            # self.progress(epoch, b, len(self.trainset))
+            b += 1
 
     def test(self, epoch):
         """
@@ -174,7 +220,8 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
         logits = None
         confidences = None
 
-        for b, (inputs, targets) in enumerate(self.testset):
+        b = 0
+        for (inputs, targets) in tqdm(self.testset):
             inputs = common.torch.as_variable(inputs, self.cuda)
             inputs = inputs.permute(0, 3, 1, 2)
             targets = common.torch.as_variable(targets, self.cuda)
@@ -190,7 +237,8 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             errors = common.numpy.concatenate(errors, common.torch.classification_error(outputs, targets, reduction='none').detach().cpu().numpy())
             logits = common.numpy.concatenate(logits, torch.max(outputs, dim=1)[0].detach().cpu().numpy())
             confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(outputs, dim=1), dim=1)[0].detach().cpu().numpy())
-            self.progress(epoch, b, len(self.testset))
+            # self.progress(epoch, b, len(self.testset))
+            b += 1
 
         global_step = epoch  # epoch * len(self.trainset) + len(self.trainset) - 1
         self.writer.add_scalar('test/loss', numpy.mean(losses), global_step=global_step)
@@ -213,7 +261,9 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
         norms = None
         objectives = None
 
-        for b, (inputs, targets) in enumerate(self.testset):
+        b = 0
+        for (inputs, targets) in tqdm(self.testset):
+            gc.collect()
             if b >= self.max_batches:
                 break
 
@@ -225,6 +275,8 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             self.objective.set(targets)
             adversarial_perturbations, adversarial_objectives = self.attack.run(self.model, inputs, self.objective)
             objectives = common.numpy.concatenate(objectives, adversarial_objectives)
+
+            gc.collect()
 
             adversarial_perturbations = common.torch.as_variable(adversarial_perturbations, self.cuda)
             inputs = inputs + adversarial_perturbations
@@ -240,9 +292,10 @@ class ConfidenceCalibratedAdversarialTraining(AdversarialTraining):
             confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(outputs, dim=1), dim=1)[0].detach().cpu().numpy())
             successes = common.numpy.concatenate(successes, torch.clamp(torch.abs(targets - torch.max(torch.nn.functional.softmax(outputs, dim=1), dim=1)[1]), max=1).detach().cpu().numpy())
             norms = common.numpy.concatenate(norms, adversarial_norms.detach().cpu().numpy())
-            self.progress(epoch, b, self.max_batches)
+            # self.progress(epoch, b, self.max_batches)
+            b += 1
 
-        global_step = epoch + 1# * len(self.trainset) + len(self.trainset) - 1
+        global_step = epoch# * len(self.trainset) + len(self.trainset) - 1
         self.writer.add_scalar('test/adversarial_loss', numpy.mean(losses), global_step=global_step)
         self.writer.add_scalar('test/adversarial_error', numpy.mean(errors), global_step=global_step)
         self.writer.add_scalar('test/adversarial_logit', numpy.mean(logits), global_step=global_step)

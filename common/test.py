@@ -5,6 +5,8 @@ import common.numpy
 import common.summary
 from common.log import log
 
+import gc
+
 
 def progress(batch, batches, epoch=None):
     """
@@ -74,6 +76,9 @@ def test(model, testset, cuda=False, return_labels=False):
         probabilities = common.numpy.concatenate(probabilities, probabilities_)
 
         progress(b, len(testset))
+        # del b, data, inputs, logits XXX
+        gc.collect()
+
 
     assert probabilities.shape[0] == len(testset.dataset)
 
@@ -146,6 +151,9 @@ def attack(model, testset, attack, objective, attempts=1, writer=common.summary.
             errors_a = common.numpy.concatenate(errors_a, errors_b)
 
             progress(b, len(testset), epoch=a)
+
+            # del b, data, inputs, logits, labels, perturbations_b
+            gc.collect()
 
         perturbations.append(perturbations_a)
         probabilities.append(probabilities_a)

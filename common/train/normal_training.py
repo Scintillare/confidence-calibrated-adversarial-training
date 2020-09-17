@@ -6,7 +6,8 @@ import common.torch
 import common.summary
 import common.numpy
 from .training_interface import *
-
+from tqdm import tqdm
+import gc
 
 class NormalTraining(TrainingInterface):
     """
@@ -105,8 +106,17 @@ class NormalTraining(TrainingInterface):
 
         self.model.train()
         assert self.model.training is True
+        batches = len(self.trainset)
 
-        for b, (inputs, targets) in enumerate(self.trainset):
+        losses = None
+        errors = None
+        logits = None
+        confidences = None
+        accs = []
+
+        b = 0
+        for (inputs, targets) in tqdm(self.trainset):
+            gc.collect()
             if self.augmentation is not None:
                 inputs = self.augmentation.augment_images(inputs.numpy())
 
@@ -114,33 +124,47 @@ class NormalTraining(TrainingInterface):
             inputs = inputs.permute(0, 3, 1, 2)
             assert len(targets.shape) == 1
             targets = common.torch.as_variable(targets, self.cuda)
+            targets = targets.long()
             assert len(list(targets.size())) == 1
 
             self.optimizer.zero_grad()
-            logits = self.model(inputs)
-            loss = self.loss(logits, targets)
-            error = common.torch.classification_error(logits, targets)
+            outputs = self.model(inputs)
+            loss = self.loss(outputs, targets)
+            
+            errors = common.numpy.concatenate(errors, common.torch.classification_error(outputs, targets, reduction='none').detach().cpu().numpy())
+            losses = common.numpy.concatenate(losses, self.loss(outputs, targets, reduction='none').detach().cpu().numpy())
+            logits = common.numpy.concatenate(logits, torch.max(outputs, dim=1)[0].detach().cpu().numpy())
+            confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(outputs, dim=1), dim=1)[0].detach().cpu().numpy())
+            accs.append((torch.sum((torch.argmax(outputs, axis=1) == targets)) / float(len(targets))).detach().cpu().numpy())
+
             loss.backward()
             self.optimizer.step()
             self.scheduler.step()
 
-            global_step = epoch * len(self.trainset) + b
-            self.writer.add_scalar('train/lr', self.scheduler.get_lr()[0], global_step=global_step)
-            self.writer.add_scalar('train/loss', loss.item(), global_step=global_step)
-            self.writer.add_scalar('train/error', error.item(), global_step=global_step)
-            self.writer.add_scalar('train/confidence', torch.mean(torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[0]).item(), global_step=global_step)
-            #print(loss.item(), error.item())
+            
+            if b == batches - 1:
+                # global_step = epoch * len(self.trainset) + b
+                global_step = epoch
+                self.writer.add_scalar('train/lr', self.scheduler.get_last_lr()[0], global_step=global_step)
+                self.writer.add_scalar('train/loss', numpy.mean(losses), global_step=global_step)
+                self.writer.add_scalar('train/error', numpy.mean(errors), global_step=global_step)
+                self.writer.add_scalar('train/confidence', numpy.mean(confidences), global_step=global_step)
+                self.writer.add_scalar('train/accuracy', numpy.mean(accs), global_step=global_step)
+                # print(loss.item(), error.item())
 
-            self.writer.add_histogram('train/logits', torch.max(logits, dim=1)[0], global_step=global_step)
-            self.writer.add_histogram('train/confidences', torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/logits', torch.max(outputs, dim=1)[0], global_step=global_step)
+                self.writer.add_histogram('train/confidences', confidences, global_step=global_step) # torch.max(torch.nn.functional.softmax(logits, dim=1), dim=1)[0]
 
-            if self.summary_gradients:
-                for name, parameter in self.model.named_parameters():
-                    self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
-                    self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
+                if self.summary_gradients:
+                    for name, parameter in self.model.named_parameters():
+                        self.writer.add_histogram('train_weights/%s' % name, parameter.view(-1), global_step=global_step)
+                        self.writer.add_histogram('train_gradients/%s' % name, parameter.grad.view(-1), global_step=global_step)
 
-            self.writer.add_images('train/images', inputs[:16], global_step=global_step)
-            self.progress(epoch, b, len(self.trainset))
+                self.writer.add_images('train/images', inputs[:16], global_step=global_step)
+            # self.progress(epoch, b, len(self.trainset))
+            b += 1
+
+        
 
     def test(self, epoch):
         """
@@ -159,17 +183,19 @@ class NormalTraining(TrainingInterface):
         logits = None
         confidences = None
 
-        for b, (inputs, targets) in enumerate(self.testset):
+        for (inputs, targets) in tqdm(self.testset):
+            gc.collect()
             inputs = common.torch.as_variable(inputs, self.cuda)
             inputs = inputs.permute(0, 3, 1, 2)
             targets = common.torch.as_variable(targets, self.cuda)
+            targets = targets.long()
 
             outputs = self.model(inputs)
             losses = common.numpy.concatenate(losses, self.loss(outputs, targets, reduction='none').detach().cpu().numpy())
             errors = common.numpy.concatenate(errors, common.torch.classification_error(outputs, targets, reduction='none').detach().cpu().numpy())
             logits = common.numpy.concatenate(logits, torch.max(outputs, dim=1)[0].detach().cpu().numpy())
             confidences = common.numpy.concatenate(confidences, torch.max(torch.nn.functional.softmax(outputs, dim=1), dim=1)[0].detach().cpu().numpy())
-            self.progress(epoch, b, len(self.testset))
+            # self.progress(epoch, b, len(self.testset))
 
         global_step = epoch  # epoch * len(self.trainset) + len(self.trainset) - 1
         self.writer.add_scalar('test/loss', numpy.mean(losses), global_step=global_step)
